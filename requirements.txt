@@ -1,0 +1,6 @@
+chainlit
+openai
+python-dotenv
+langchain
+langchain-openai
+-e .
