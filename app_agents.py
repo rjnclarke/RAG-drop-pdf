@@ -1,11 +1,12 @@
 import chainlit as cl
-from langchain.chains import RetrievalQA, LLMChain
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
-from langchain.chains import RetrievalQA
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain, LLMChain
+from langchain import hub
 from langchain.callbacks import StdOutCallbackHandler
 from langchain_community.vectorstores import FAISS
-from langchain.agents import Tool, ZeroShotAgent, AgentExecutor
+from langchain.agents import Tool, ZeroShotAgent, AgentExecutor, create_react_agent
 from dotenv import load_dotenv
 import os 
 
@@ -21,25 +22,20 @@ db_excel_basics = FAISS.load_local("dbs/excel_basics.db",embeddings,allow_danger
 retriever_2010 = db_excel_2010.as_retriever()
 retriever_basics = db_excel_basics.as_retriever()
 
-qa_with_sources_chain_2010 = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever_2010,
-    callbacks=[handler],
-    return_source_documents=True 
+retrieval_qa_chat_prompt = hub.pull("langchain-ai/retrieval-qa-chat")
+
+combine_docs_chain = create_stuff_documents_chain(
+    llm, retrieval_qa_chat_prompt
 )
 
-qa_with_sources_chain_basics = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever_basics,
-    callbacks=[handler],
-    return_source_documents=True
-)
+retrieval_chain_2010 = create_retrieval_chain(retriever_2010, combine_docs_chain)
+retrieval_chain_basics = create_retrieval_chain(retriever_basics, combine_docs_chain)
 
 def query_2010(input):
-    return qa_with_sources_chain_2010('query', input)
+    return retrieval_chain_2010.invoke({'input': input})
 
 def query_basics(input):
-    return qa_with_sources_chain_basics('query', input)
+    return retrieval_chain_basics.invoke({'input': input})
 
 tools = [
     Tool(
@@ -54,24 +50,9 @@ tools = [
     ),
 ]
 
-prefix = """Have a conversation with a human, answering the following questions as best you can. You have access to the following tools:"""
-suffix = """Begin!"
-
-Question: {input}
-{agent_scratchpad}"""
-
-prompt = ZeroShotAgent.create_prompt(
-    tools,
-    prefix=prefix,
-    suffix=suffix,
-    input_variables=["input", "agent_scratchpad"]
-)
-
-
-llm_chain = LLMChain(llm=llm, prompt=prompt)
-
-excel_agent = ZeroShotAgent(llm_chain=llm_chain, tools=tools, verbose=True)
-excel_agent_chain = AgentExecutor.from_agent_and_tools(agent=excel_agent, tools=tools, verbose=True)
+prompt = hub.pull("hwchase17/react")
+excel_agent = create_react_agent(llm, tools, prompt)
+excel_agent_chain = AgentExecutor.from_agent_and_tools(agent=excel_agent, tools=tools, verbose=True, return_intermediate_steps=True)
 
 @cl.on_chat_start
 async def on_chat_start():
@@ -88,12 +69,21 @@ async def on_chat_start():
 @cl.on_message
 async def on_message(message: cl.Message):
     # getting db and retriever
-    response = excel_agent_chain.run({"input" : message.content})
-    
+    result = excel_agent_chain.invoke({'input':message.content})
 
+    question = f"Initial query... {result['input']}\n\n"
+    response = f"Final response... {result['output']}\n\n"
+    hold = ""
+    for i in range(len(result['intermediate_steps'])):
+        reflection = result['intermediate_steps'][i][0].log.split('\n')[0]
+        tool = result['intermediate_steps'][i][0].tool
+        tool_in = result['intermediate_steps'][i][0].tool_input
+        resp = result['intermediate_steps'][i][1]['answer']
+        hold += f'Step {i+1}:\n'
+        hold += f'The agent considers... "{reflection}"\n'
+        hold += f'The angent chooses the tool...  "{tool}."\n'
+        hold += f'The angent queries the tool... "{tool_in}."\n'
+        hold += f'The angent recieves the response...\n"{resp}"\n\n'
 
-
-
-
-    reply = f"You Sent: {message.content}\n\nResponse: {response}!"
-    await cl.Message(reply).send()
+    print_response = question + response + hold
+    await cl.Message(print_response).send()
