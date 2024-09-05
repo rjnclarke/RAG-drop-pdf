@@ -4,7 +4,7 @@ from langchain.chains import RetrievalQA
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import ConversationalRetrievalChain
 from langchain.callbacks import StdOutCallbackHandler
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.document_loaders import PyPDFLoader
 from langchain.memory import ChatMessageHistory, ConversationBufferMemory
 
